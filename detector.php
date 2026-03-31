@@ -1,117 +1,102 @@
 <?php
 declare(strict_types=1);
 
-/* ================= LIMPAR TELA SEM CLEAR ================= */
-function limparTela(): void {
-    echo "\033[2J\033[;H";
-}
+/* ========= LIMPAR ========= */
+function limpar(){ echo "\033[2J\033[;H"; }
 
-/* ================= CORES ================= */
-const C = [
-    'rst' => "\e[0m", 'bold' => "\e[1m",
-    'r' => "\e[91m", 'g' => "\e[92m",
-    'y' => "\e[93m", 'b' => "\e[34m",
-    'c' => "\e[36m", 'w' => "\e[97m",
+/* ========= CORES ========= */
+const C=[
+ 'r'=>"\e[91m",'g'=>"\e[92m",'y'=>"\e[93m",
+ 'b'=>"\e[94m",'c'=>"\e[96m",'w'=>"\e[97m",
+ 'bold'=>"\e[1m",'rst'=>"\e[0m"
 ];
+function c(...$n){return implode('',array_map(fn($x)=>C[$x]??'',$n));}
 
-function c(string ...$n){return implode('',array_map(fn($x)=>C[$x]??'',$n));}
-function rst(){return C['rst'];}
-
-/* ================= BANNER ================= */
+/* ========= ASCII CLEAN ========= */
 function banner(){
-    echo c('bold','r')."
-███  ███  █████  ███████  ██  ██
-████ ████ ██   ██ ██       ██ ██
-██ ████ ██ ███████ █████     ███
-██  ██  ██ ██   ██ ██       ██ ██
-██      ██ ██   ██ ███████ ██  ██
-".rst();
-    echo c('c')." MAGISK • Root & Bootloader Advanced Scanner\n\n".rst();
+echo c('bold','r')."
+╔══════════════════════════════════════╗
+║              MAGISK SCAN            ║
+╚══════════════════════════════════════╝
+".c('rst');
+echo c('c')."     Advanced Android Root / Bootloader Detector\n\n".c('rst');
 }
 
-/* ================= ADB ================= */
-function adb(string $cmd): string {
-    return trim((string)shell_exec("adb $cmd 2>/dev/null"));
+/* ========= ADB ========= */
+function adb($c){ return trim((string)shell_exec("adb $c 2>/dev/null")); }
+function conectado(){
+ $d=shell_exec('adb devices');
+ return $d && strpos($d,'device')!==false && strpos($d,'unauthorized')===false;
 }
 
-function prepararADB(): void {
-    @chmod('/data/data/com.termux/files/usr/bin/adb',0755);
+/* ========= DETECTOR PADRÃO ========= */
+function detector($nome,$fn){
+ echo c('bold','b')."• $nome\n".c('rst');
+ $r=$fn();
+ if($r===true) echo c('bold','r')."    • Detectado\n\n".c('rst');
+ elseif($r==='suspeito') echo c('bold','y')."    • Suspeito\n\n".c('rst');
+ else echo c('bold','g')."    • Não detectado\n\n".c('rst');
 }
 
-function conectado(): bool {
-    $d = shell_exec('adb devices');
-    return $d && strpos($d,'device')!==false && strpos($d,'unauthorized')===false;
-}
-
-/* ================= PADRÃO DETECTOR ================= */
-function detector(string $nome, callable $fn){
-    echo c('bold','b')."• Detector: $nome\n".rst();
-    $r = $fn();
-    if($r===true)
-        echo c('bold','r')."    • Detectado\n\n".rst();
-    elseif($r==='suspeito')
-        echo c('bold','y')."    • Suspeito\n\n".rst();
-    else
-        echo c('bold','g')."    • Não detectado\n\n".rst();
-}
-
-/* ================= SCAN ================= */
+/* ========= SCAN ========= */
 function scan(){
-    limparTela();
-    banner();
+ limpar(); banner();
 
-    if(!conectado()){
-        echo c('r')."ADB não conectado. Faça o pareamento primeiro.\n".rst();
-        sleep(2);
-        return;
-    }
+ if(!conectado()){
+  echo c('r')."ADB não conectado.\n".c('rst');
+  sleep(2); return;
+ }
 
-    echo c('c')."Coletando dados do sistema...\n\n".rst();
+ echo c('c')."Coletando dados do sistema...\n\n".c('rst');
 
-    $props   = adb('shell getprop');
-    $mount   = adb('shell mount');
-    $su      = adb('shell which su');
-    $pkgs    = adb('shell pm list packages');
-    $files   = adb('shell ls /system/bin');
+ $prop  = adb('shell getprop');
+ $mount = adb('shell mount');
+ $su    = adb('shell which su');
+ $id    = adb('shell id');
+ $pkgs  = adb('shell pm list packages');
+ $bins  = adb('shell ls /system/bin');
+ $xbin  = adb('shell ls /system/xbin');
+ $sbin  = adb('shell ls /sbin');
+ $magisk= adb('shell ls /data/adb');
+ $sepol = adb('shell getenforce');
 
-    detector('Binário SU', fn()=> stripos($su,'su')!==false);
+ detector('Binário su acessível', fn()=> stripos($su,'su')!==false);
 
-    detector('Partições RW', fn()=> stripos($mount,' rw,')!==false ? 'suspeito':false);
+ detector('UID 0 (root ativo)', fn()=> stripos($id,'uid=0')!==false);
 
-    detector('Bootloader props', function()use($props){
-        if(stripos($props,'flash.locked=0')!==false) return true;
-        if(stripos($props,'verifiedbootstate=orange')!==false) return true;
-        return false;
-    });
+ detector('/system montado RW', fn()=> stripos($mount,' /system ')!==false && stripos($mount,' rw,')!==false?'suspeito':false);
 
-    detector('Pacotes root conhecidos', function()use($pkgs){
-        foreach(['magisk','kernelsu','apatch','supersu','zygisk','riru'] as $p)
-            if(stripos($pkgs,$p)!==false) return true;
-        return false;
-    });
+ detector('Bootloader desbloqueado (props)', function()use($prop){
+  if(stripos($prop,'flash.locked=0')!==false) return true;
+  if(stripos($prop,'verifiedbootstate=orange')!==false) return true;
+  return false;
+ });
 
-    detector('Build test-keys', fn()=> stripos($props,'test-keys')!==false?'suspeito':false);
+ detector('Build test-keys', fn()=> stripos($prop,'test-keys')!==false?'suspeito':false);
 
-    detector('Arquivos suspeitos em /system/bin', fn()=> stripos($files,'su')!==false);
+ detector('Pacotes Magisk / KernelSU / APatch', function()use($pkgs){
+  foreach(['magisk','kernelsu','apatch','zygisk','riru'] as $p)
+   if(stripos($pkgs,$p)!==false) return true;
+  return false;
+ });
 
-    echo c('w')."Pressione ENTER para voltar...".rst();
-    fgets(STDIN,1024);
+ detector('Arquivos su em /system/bin', fn()=> stripos($bins,'su')!==false);
+ detector('Arquivos su em /system/xbin', fn()=> stripos($xbin,'su')!==false);
+ detector('Arquivos su em /sbin', fn()=> stripos($sbin,'su')!==false);
+
+ detector('Pasta /data/adb (Magisk moderno)', fn()=> stripos($magisk,'magisk')!==false);
+
+ detector('SELinux Permissive', fn()=> stripos($sepol,'Permissive')!==false?'suspeito':false);
+
+ echo c('w')."ENTER para voltar".c('rst');
+ fgets(STDIN,1024);
 }
 
-/* ================= MENU ================= */
-function menu(){
-    echo c('b')."[1] Iniciar Scan\n[S] Sair\n\nEscolha: ".rst();
-}
-
-/* ================= LOOP ================= */
-prepararADB();
-
+/* ========= MENU ========= */
 while(true){
-    limparTela();
-    banner();
-    menu();
-    $op=trim(fgets(STDIN,1024));
-
-    if($op==='1') scan();
-    if(strtolower($op)==='s') exit;
+ limpar(); banner();
+ echo c('b')."[1] Iniciar Scan\n[S] Sair\n\nEscolha: ".c('rst');
+ $o=trim(fgets(STDIN,1024));
+ if($o==='1') scan();
+ if(strtolower($o)==='s') exit;
 }
